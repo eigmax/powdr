@@ -651,6 +651,7 @@ impl<Expr> Identity<Expr> {
             right: Default::default(),
         }
     }
+
     /// Returns the expression in case this is a polynomial identity.
     pub fn expression_for_poly_id(&self) -> &Expr {
         assert_eq!(self.kind, IdentityKind::Polynomial);
@@ -667,6 +668,38 @@ impl<Expr> Identity<Expr> {
 impl<T> Identity<AlgebraicExpression<T>> {
     pub fn contains_next_ref(&self) -> bool {
         self.left.contains_next_ref() || self.right.contains_next_ref()
+    }
+
+    /// Either returns (a, Some(b)) if this is a - b or (a, None)
+    /// if it is a polynomial identity of a different structure.
+    /// Panics if it is a different kind of constraint.
+    pub fn as_polynomial_identity(
+        &self,
+    ) -> (&AlgebraicExpression<T>, Option<&AlgebraicExpression<T>>) {
+        assert_eq!(self.kind, IdentityKind::Polynomial);
+        match self.expression_for_poly_id() {
+            AlgebraicExpression::BinaryOperation(a, AlgebraicBinaryOperator::Sub, b) => {
+                (a.as_ref(), Some(b.as_ref()))
+            }
+            a => (a, None),
+        }
+    }
+}
+
+impl<R> Identity<parsed::Expression<R>> {
+    /// Either returns (a, Some(b)) if this is a - b or (a, None)
+    /// if it is a polynomial identity of a different structure.
+    /// Panics if it is a different kind of constraint.
+    pub fn as_polynomial_identity(
+        &self,
+    ) -> (&parsed::Expression<R>, Option<&parsed::Expression<R>>) {
+        assert_eq!(self.kind, IdentityKind::Polynomial);
+        match self.expression_for_poly_id() {
+            parsed::Expression::BinaryOperation(a, BinaryOperator::Sub, b) => {
+                (a.as_ref(), Some(b.as_ref()))
+            }
+            a => (a, None),
+        }
     }
 }
 
