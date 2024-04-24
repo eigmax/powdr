@@ -1,4 +1,4 @@
-// ------------- gate types - can be generic later, but we probably need generic enums and traits for that -------------------
+// ------------- gate types -------------------
 
 /// Recursive gate enum
 enum Op {
@@ -6,6 +6,8 @@ enum Op {
     Xor(Op, Op),
     And(Op, Op),
     Rotl(Op, Op), // Rotate left by one bit, the second argument is ignored.
+    /// Reference to the output of another (already flattened) gate.
+    Gate(int),
 }
 
 /// Flattened gate type
@@ -17,18 +19,21 @@ enum Gate {
     Rotl
 }
 
-// TODO How to efficiently reference repeated ops?
-// Through a "ref" Op that has an ID?
-// Or should we deduplicate automatically?
-
 // ---------------- circuit flattening operations -----------------------------------
 
+let new_circuit = |input_count| {
+    let input_gates = std::array::new(input_count, |i| (Gate::Input, i, i));
+    std::array::fold(
+        input_gates,
+        ([], std::btree::new()),
+        |state, (gate, l, r)| internal::add_gate(state, (gate, l, r))
+    )
+};
+
 // flattens an Op-structure into an array of (gate_type, input_id1, input_id2)
-let flatten_circuit = |routine| {
-    let input_count = internal::largest_input(routine) + 1;
-    let state = std::array::new(input_count, |i| (Gate::Input, i, i));
-    let (flattened, _) = internal::flatten_circuit(state, routine);
-    flattened
+let flatten_circuit = |state, routine| {
+    let (flattened, output_id) = internal::flatten_circuit(state, routine);
+    (flattened, Gate::Gate(output_id))
 };
 
 mod internal {
@@ -46,7 +51,8 @@ mod internal {
 
     let flatten_circuit = |state, routine|
         match routine {
-            Op::Input(n) => (state, n),
+            Op::Input(n) => (state, n), // TODO this assumes the inputs are at the start.
+            Op::Gate(n) => (state, n),
             Op::Xor(a, b) => {
                 let (s2, a_out) = flatten_circuit(state, a);
                 let (s3, b_out) = flatten_circuit(s2, b);
@@ -64,8 +70,18 @@ mod internal {
             },
         };
 
-    let append_gate = |state, gate, in1, in2|
-        (state + [(gate, in1, in2)], std::array::len(state));
+    /// Appends a gate to the state and returns the gate ID.
+    /// If the gate already exists, the existing ID is returned.
+    let append_gate = |(gates, gate_ids), gate)|
+        match std::btree::search(gate_ids, gate), gate_ids_cmp) {
+            Option::Some(id) => ((gates, gate_ids), id),
+            Option::None => {
+                let id = std::array::len(gates);
+                let new_gates = gates + [gate];
+                let new_gate_ids = std::btree::insert(gate_ids, (gate, id));
+                ((new_gates, new_gate_ids), id)
+            }
+        };
 
 }
 
@@ -156,6 +172,14 @@ let ops_to_permutation: (Gate, int, int)[] -> (int -> int) = |ops| {
 };
 
 // --------------------------- circuit description ---------------------------------
+
+let routine_part = |a, b| rotl(and(xor(a, b), and(a, xor(b, a))), a);
+
+let routine_2 = |circuit_descr, a, b| {
+    let (circuit_descr, out1) = flatten(circuit_descr, routine_part(a, b));
+    flatten(circuit_description, xor(out1, out1))
+}
+
 
 // This is the main input, the description of the circuit:
 let<T1, T2> routine: (T1, T1, (T1, T1 -> T1), (T1, T1 -> T1), (T1, T1 -> T2)) -> T2 =
