@@ -1,6 +1,6 @@
-// ------------- gate types -------------------
+// ------------- gate stuff, application-specific -------------------
 
-/// Recursive gate enum
+/// Recursive gate enum, application-specific
 enum Op {
     Input(int),
     Xor(Op, Op),
@@ -10,76 +10,93 @@ enum Op {
     Gate(int),
 }
 
-/// Flattened gate type
-enum Gate {
-    /// An input gate, the parameters are ignored. The input ID is the gate ID.
-    Input,
-    Xor,
-    And,
-    Rotl
-}
+let decompose_routine: Op -> DecomposedGate<Op> = |op| match op {
+    Op::Input(n) => DecomposedGate::Input(n),
+    Op::Gate(n) => DecomposedGate::Reference(n),
+    Op::Xor(a, b) => DecomposedGate::Op(1, a, b),
+    Op::And(a, b) => DecomposedGate::Op(2, a, b),
+    Op::Rotl(a, b) => DecomposedGate::Op(3, a, b),
+};
+
+/// Encapsulate a gate ID inside an Op structure.
+let id_to_gate: int -> Op = |id| Op::Gate(int);
 
 // ---------------- circuit flattening operations -----------------------------------
+
+enum DecomposedGate<Op> {
+    Input(int),
+    Reference(int),
+    Op(int, Op, Op),
+}
 
 let new_circuit = |input_count| {
     let input_gates = std::array::new(input_count, |i| (Gate::Input, i, i));
     std::array::fold(
         input_gates,
-        ([], std::btree::new()),
+        (0, std::btree::new()),
         |state, (gate, l, r)| internal::add_gate(state, (gate, l, r))
     )
 };
 
-// flattens an Op-structure into an array of (gate_type, input_id1, input_id2)
-let flatten_circuit = |state, routine| {
-    let (flattened, output_id) = internal::flatten_circuit(state, routine);
-    (flattened, Gate::Gate(output_id))
-};
+/// Flattens an Op-structure into an array of (gate_type, input_id1, input_id2).
+/// Takes a state object and a routine that can be decomposed by
+/// decompose_routine and returns an updated state and the output gate ID.
+/// TODO once we have traits, the functions should be replaced by trait functions.
+let flatten_circuit:
+    = |state, routine, decompose_routine, id_to_gate| {
+        let (flattened, output_id) = internal::flatten_circuit(state, routine, decompose_routine);
+        (flattened, id_to_gate(output_id))
+    };
 
 mod internal {
     use std::utils::max;
     use super::Op;
     use super::Gate;
+    use std::btree::CmpResult;
 
-    let largest_input = |routine|
-        match routine {
-            Op::Input(n) => n,
-            Op::Xor(a, b) => max(largest_input(a), largest_input(b)),
-            Op::And(a, b) => max(largest_input(a), largest_input(b)),
-            Op::Rotl(a, b) => max(largest_input(a), largest_input(b)),
+    let flatten_circuit = |state, routine, decompose_routine|
+        match decompose_routine(routine) {
+            DecomposedGate::Input(n) => (state, n), // TODO this assumes the inputs are at the start.
+            DecomposedGate::Reference(n) => (state, n),
+            DecomposedGate::Op(gate, a, b) => {
+                let (s2, a_out) = flatten_circuit(state, a, decompose_routine);
+                let (s3, b_out) = flatten_circuit(s2, b, decompose_routine);
+                append_gate(s3, (gate, a_out, b_out))
+            },
         };
+    
+    let gate_ids_cmp: (int, int, int) -> CmpResult |(a1, a2, a3), (b1, b2, b3)| {
+        match cmp_int(a1, b1) {
+            CmpResult::Equal => match cmp_two_tuple((a2, a3), (b2, b3)),
+            x => x,
+        }
+    };
+    let cmp_two_tuple: (int, int) -> CmpResult = |(a1, a2), (b1, b2)| {
+        match cmp_int(a1, b1) {
+            CmpResult::Equal => cmp_int(a2, b2),
+            x => x,
+        }
+    };
 
-    let flatten_circuit = |state, routine|
-        match routine {
-            Op::Input(n) => (state, n), // TODO this assumes the inputs are at the start.
-            Op::Gate(n) => (state, n),
-            Op::Xor(a, b) => {
-                let (s2, a_out) = flatten_circuit(state, a);
-                let (s3, b_out) = flatten_circuit(s2, b);
-                append_gate(s3, Gate::Xor, a_out, b_out)
-            },
-            Op::And(a, b) => {
-                let (s2, a_out) = flatten_circuit(state, a);
-                let (s3, b_out) = flatten_circuit(s2, b);
-                append_gate(s3, Gate::And, a_out, b_out)
-            },
-            Op::Rotl(a, b) => {
-                let (s2, a_out) = flatten_circuit(state, a);
-                let (s3, b_out) = flatten_circuit(s2, b);
-                append_gate(s3, Gate::Rotl, a_out, b_out)
-            },
+    let cmp_int: int, int -> CmpResult = |a, b|
+        if a < b {
+            CmpResult::Less
+        } else {
+            if a > b {
+                CmpResult::Greater
+            } else {
+                CmpResult::Equal
+            }
         };
 
     /// Appends a gate to the state and returns the gate ID.
     /// If the gate already exists, the existing ID is returned.
-    let append_gate = |(gates, gate_ids), gate)|
+    let append_gate = |(gate_count, gate_ids), gate)|
         match std::btree::search(gate_ids, gate), gate_ids_cmp) {
-            Option::Some(id) => ((gates, gate_ids), id),
+            Option::Some(id) => ((gate_count, gate_ids), id),
             Option::None => {
-                let id = std::array::len(gates);
-                let new_gates = gates + [gate];
                 let new_gate_ids = std::btree::insert(gate_ids, (gate, id));
-                ((new_gates, new_gate_ids), id)
+                ((gate_count + 1, new_gate_ids), gate_count)
             }
         };
 
