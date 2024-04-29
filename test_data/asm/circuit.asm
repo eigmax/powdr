@@ -11,7 +11,7 @@ enum Op {
 }
 
 let decompose_routine: Op -> Gate<Op> = |op| match op {
-    Op::Input(n) => Gate::Input(n),
+    Op::Input(n) => Gate::Reference(n), // TODO this assumes that we started appending all the inputs
     Op::Gate(n) => Gate::Reference(n),
     Op::Xor(a, b) => Gate::Op(1, a, b),
     Op::And(a, b) => Gate::Op(2, a, b),
@@ -24,24 +24,19 @@ let id_to_gate: int -> Op = |id| Op::Gate(id);
 // ---------------- circuit flattening operations -----------------------------------
 
 enum Gate<Op> {
-    Input(int),
     Reference(int),
     Op(int, Op, Op),
 }
 
-let new_circuit = |input_count| {
-    let input_gates = std::array::new(input_count, |i| (Gate::Input, i, i));
-    std::array::fold(
-        input_count,
-        (0, std::btree::new()),
-        |state, (gate, l, r)| internal::append_gate(state, (gate, l, r))
-    )
+let new_circuit = || {
+    ([], std::btree::new())
 };
 
 /// Flattens an Op-structure into an array of (gate_type, input_id1, input_id2).
-/// Takes a state object and a routine that can be decomposed by
-/// decompose_routine and returns an updated state and the output gate ID.
+/// Takes a state object (created using new_circuit) and a routine that
+/// can be decomposed by decompose_routine and returns an updated state and the output gate ID.
 /// TODO once we have traits, the functions should be replaced by trait functions.
+/// This function can be called multiple times on different sub-routines.
 let flatten_circuit = |state, routine, decompose_routine, id_to_gate| {
         let (flattened, output_id) = internal::flatten_circuit(state, routine, decompose_routine);
         (flattened, id_to_gate(output_id))
@@ -56,7 +51,6 @@ mod internal {
 
     let flatten_circuit = |state, routine, decompose_routine|
         match decompose_routine(routine) {
-            Gate::Input(n) => (state, n), // TODO this assumes the inputs are at the start.
             Gate::Reference(n) => (state, n),
             Gate::Op(op, a, b) => {
                 let (s2, a_out) = flatten_circuit(state, a, decompose_routine);
@@ -85,12 +79,13 @@ mod internal {
 
     /// Appends a gate to the state and returns the gate ID.
     /// If the gate already exists, the existing ID is returned.
-    let append_gate = |(gate_count, gate_ids), gate|
+    let append_gate = |(gates, gate_ids), gate|
         match std::btree::get(gate_ids, gate, gate_ids_cmp) {
-            Option::Some(id) => ((gate_count, gate_ids), id),
+            Option::Some(id) => ((gates, gate_ids), id),
             Option::None => {
-                let new_gate_ids = std::btree::insert(gate_ids, (gate, gate_count));
-                ((gate_count + 1, new_gate_ids), gate_count)
+                let id = std::array::len(gates);
+                let new_gate_ids = std::btree::insert(gate_ids, (gate, id));
+                ((gates + [gate], new_gate_ids), id)
             }
         };
 
@@ -126,7 +121,7 @@ let vertex_id_to_row = |vertex_id| {
 // ------------------------------- permutation routines for the copy constraints ---------------------------
 
 /// Computes the permutation from a flattened circuit.
-let ops_to_permutation: (Gate, int, int)[] -> (int -> int) = |ops| {
+let ops_to_permutation: (int, int, int)[] -> (int -> int) = |ops| {
     // First create an edge list and sort it.
     // The first component of the edge list is the gate index.
     // The second component is the vertex index:
